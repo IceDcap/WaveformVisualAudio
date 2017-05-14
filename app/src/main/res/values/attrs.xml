@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <declare-styleable name="WaveformView">
+        <attr name="interval_of_seconds" format="dimension"/>
+        <attr name="degree_of_second_width" format="dimension"/>
+        <attr name="degree_of_second_height" format="dimension"/>
+        <attr name="degree_of_five_second_height" format="dimension"/>
+        <attr name="rectangle_line_height" format="dimension"/>
+        <attr name="rectangle_line_color" format="color"/>
+        <attr name="degree_color" format="color"/>
+        <attr name="wave_color" format="color"/>
+        <attr name="time_text_color" format="color"/>
+        <attr name="time_text_size" format="dimension"/>
+    </declare-styleable>
+</resources>
