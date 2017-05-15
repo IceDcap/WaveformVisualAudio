@@ -46,6 +46,7 @@ public class MainActivity extends Activity implements WaveformView.WaveformListe
     Canvas canvas;
     Paint paint;
     AudioRecordHelper helper;
+    private long mCurrentTime;
 
     WaveformView mWaveformView;
     int waveHeight;
@@ -134,7 +135,8 @@ public class MainActivity extends Activity implements WaveformView.WaveformListe
     @Override
     public void onWaveformScrolled(long seek) {
         Log.e("ddd", "seek == " + seek);
-        mWaveIndex =(int) (seek / 25);
+        mCurrentTime = seek;
+        mWaveIndex =(int) (seek / mWaveformView.getIntervalPerFrame());
     }
 
     @Override
@@ -148,7 +150,7 @@ public class MainActivity extends Activity implements WaveformView.WaveformListe
 
     public void resetWaveView(View v) {
 //        mWaveformView.reset();
-        helper.play();
+        helper.play(mWaveIndex * mWaveformView.getIntervalPerFrame());
     }
 
     int mWaveIndex = 0;
@@ -166,6 +168,17 @@ public class MainActivity extends Activity implements WaveformView.WaveformListe
             }
         });
         mWaveIndex++;
+    }
+
+    @Override
+    public void onUpdateWaveFramePos() {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                mWaveformView.refreshByPos(mCurrentTime);
+                mCurrentTime += mWaveformView.getIntervalPerFrame();
+            }
+        });
     }
 
     private class RecordAudioTask extends AsyncTask<Void, double[], Void> {

@@ -382,21 +382,33 @@ public class WaveformView extends View {
         mWaveColor = waveColor;
     }
 
+    public int[] getWaveHeights() {
+        return mWaveHeights;
+    }
+
     public void refreshByFrame(int[] waveHeights) {
         mWaveHeights = waveHeights;
-        mCurrentTime = waveHeights.length * 1000 / 40;// / (int) mInterValOfSeconds;
+        mCurrentTime = waveHeights.length * 1000 / (int) mInterValOfSeconds;
         mLeft = calculateLeft(mWaveHeights);//mMarginLeft;
         if (null != mListener) {
             mListener.onWaveformOffset(mCurrentTime);
         }
-        invalidate();
+        postInvalidate();
     }
 
-    private int calculateIndicatorLeft(int currentTime/*second*/) {
+    public void refreshByPos(long startTime) {
+        mLeft = calculateLeft(startTime);
+        if (null != mListener) {
+            mListener.onWaveformOffset(mCurrentTime);
+        }
+        postInvalidate();
+    }
+
+    private int calculateIndicatorLeft(long currentTime) {
         int left = mWidth / 2;
-        final int halfWidthTimes = mWidth / 2 - (int) mMarginLeft;
-        if (halfWidthTimes / mInterValOfSeconds > currentTime) {
-            left = (int) mMarginLeft + (int) mInterValOfSeconds * currentTime;
+        final long halfWidthTimes = (long) ((mWidth / 2 - (int) mMarginLeft) * 1000 / mInterValOfSeconds);
+        if (halfWidthTimes > currentTime) {
+            left = (int) mMarginLeft + (int) (currentTime * 1000 / mInterValOfSeconds);
         }
         return left - (int) DimenUtil.dip2px(getContext(), 1.5f);
     }
@@ -424,13 +436,18 @@ public class WaveformView extends View {
         return (int) Math.max((mMarginLeft + mMarginRight + degreeLength), mWidth);
     }
 
-    private float calculateLeft(int currentTime) {
-        final int halfWidth = mWidth / 2;
-        final float waveLength = currentTime * mInterValOfSeconds + mDegreeOfSecondsWidth;
-        if (mMarginLeft + waveLength < halfWidth) {
-            return mMarginLeft;
-        }
-        return halfWidth - mMarginLeft - waveLength;
+    private float calculateLeft(long currentTime) {
+        mCurrentTime = currentTime;
+        final int indicatorLeft = calculateIndicatorLeft(mWaveHeights/*currentTime*/);
+        return (float) indicatorLeft - (float) currentTime / 1000 * mInterValOfSeconds;
+    }
+
+    public float getWidthPerSecond() {
+        return mInterValOfSeconds;
+    }
+
+    public long getIntervalPerFrame() {
+        return (long)(1000 / mInterValOfSeconds);
     }
 
     private float calculateLeft(int[] waveSet) {

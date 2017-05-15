@@ -28,6 +28,8 @@ import java.nio.ByteOrder;
 import java.nio.ShortBuffer;
 import java.util.Timer;
 import java.util.TimerTask;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadPoolExecutor;
 
 import ca.uol.aig.fftpack.RealDoubleFFT;
 
@@ -43,7 +45,6 @@ public class AudioRecordHelper {
     private static final int SAMPLE_RATE = 44100;
     private boolean mShouldContinue;
     private int mRecordBufferSize;
-    private int mWaveSize;
     private AudioTrack mAudioTrack;
     private ShortBuffer mSamples; // the samples to play
     private int mNumSamples; // number of samples to play
@@ -51,6 +52,8 @@ public class AudioRecordHelper {
     private String mFilename;
     private CheapSoundFile mCheapSoundFile;
     private MediaPlayer mWaveMediaPlayer;
+    private ThreadPoolExecutor mThreadPoolExecutor;
+    private int mWaveSize;
 
     final WaveHeader waveHeader = new WaveHeader();
 
@@ -68,6 +71,7 @@ public class AudioRecordHelper {
             mFile = file;
             mFilename = mFile.getAbsolutePath();
             mRandomAccessFile = new RandomAccessFile(mFile, "rw");
+            mThreadPoolExecutor = (ThreadPoolExecutor) Executors.newFixedThreadPool(10);
         } catch (FileNotFoundException e) {
             e.printStackTrace();
         }
@@ -89,82 +93,53 @@ public class AudioRecordHelper {
         }
     }
 
+    public int getWaveSize() {
+        return mWaveSize;
+    }
+
     public void start(long time) {
         mShouldContinue = true;
-        try {
-            Log.e("ddd", "filename = " + mFile.getAbsolutePath());
-            CheapSoundFile cheapSoundFile = CheapSoundFile.create(mFile.getAbsolutePath(), new CheapSoundFile.ProgressListener() {
-                @Override
-                public boolean reportProgress(double fractionComplete) {
-                    return false;
-                }
-            });
-            Log.e("ddd", "size = " + cheapSoundFile.getFileSizeBytes() + "\tframe = " + cheapSoundFile.getNumFrames() + "\t");
-            final long filePointerSeek = cheapSoundFile.getAvgBitrateKbps() * time;
-            Log.e("ddd", "filePointerSeek >>> " + filePointerSeek);
-            Log.e("ddd", " >>> " + cheapSoundFile.getNumFrames());
-            recordAudio(filePointerSeek);
+        if (time > 0) {
+            try {
+                Log.e("ddd", "filename = " + mFile.getAbsolutePath());
+                CheapSoundFile cheapSoundFile = CheapSoundFile.create(mFile.getAbsolutePath(), new CheapSoundFile.ProgressListener() {
+                    @Override
+                    public boolean reportProgress(double fractionComplete) {
+                        return false;
+                    }
+                });
+                Log.e("ddd", "size = " + cheapSoundFile.getFileSizeBytes() + "\tframe = " + cheapSoundFile.getNumFrames() + "\t");
+                final long filePointerSeek = cheapSoundFile.getAvgBitrateKbps() * time;
+                Log.e("ddd", "filePointerSeek >>> " + filePointerSeek);
+                Log.e("ddd", " >>> " + cheapSoundFile.getNumFrames());
+                recordAudio(filePointerSeek);
 
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-
-    }
-
-    class Task implements Runnable{
-        int blockSize;
-        int numberOfShort;
-        short[] audioBuffer;
-
-        RealDoubleFFT fftTrans;// = new RealDoubleFFT(blockSize);
-        double[] toTrans;// = new double[blockSize];
-
-        public Task(int blockSize, int numberOfShort) {
-            this.blockSize = blockSize;
-            this.numberOfShort = numberOfShort;
-            fftTrans = new RealDoubleFFT(blockSize);
-            toTrans = new double[blockSize];
-        }
-
-        public void update(int blockSize, int numberOfShort){
-
-            this.blockSize = blockSize;
-            this.numberOfShort = numberOfShort;
-            fftTrans = new RealDoubleFFT(blockSize);
-            toTrans = new double[blockSize];
-        }
-
-        @Override
-        public void run() {
-            for (int i = 0; i < blockSize && i < numberOfShort; i++) {
-                toTrans[i] = (double) audioBuffer[i] / Short.MAX_VALUE;
+            } catch (IOException e) {
+                e.printStackTrace();
             }
-            fftTrans.ft(toTrans);
-            setCurrentWaveSize(toTrans, blockSize);
+
+        } else {
+            recordAudio(0);
         }
     }
+
 
     public void stop() {
         mShouldContinue = false;
     }
 
-    public void play() {
+    public void play(final long seek) {
         mShouldContinue = true;
         new Thread(new Runnable() {
             @Override
             public void run() {
 //                playPCMAudio(mFile, 1);
-                playWavFile(mFile, 1);
+                playWavFile(mFile, 1, seek);
             }
         }).start();
 
     }
 
-    public int getWaveSize() {
-        return mWaveSize;
-    }
-
-    Task mTask;
 
     private void recordAudio(final long offset) {
         new Thread(new Runnable() {
@@ -193,11 +168,11 @@ public class AudioRecordHelper {
                 }
 
                 // audio buffer (AudioRecord receive the short type data)
-                int blockSize = mRecordBufferSize / 2;
-                short[] audioBuffer = new short[blockSize];
+                final int blockSize = mRecordBufferSize / 2;
+                final short[] audioBuffer = new short[blockSize];
 //
-//                final RealDoubleFFT fftTrans = new RealDoubleFFT(blockSize);
-//                double[] toTrans = new double[blockSize];
+                final RealDoubleFFT fftTrans = new RealDoubleFFT(blockSize);
+                final double[] toTrans = new double[blockSize];
 
 
                 AudioRecord audioRecord = new AudioRecord(MediaRecorder.AudioSource.DEFAULT,
@@ -210,16 +185,17 @@ public class AudioRecordHelper {
                 }
 
                 audioRecord.startRecording();
-                final Timer timer = new Timer("waveform");
-                timer.schedule(new TimerTask() {
-                    @Override
-                    public void run() {
-                        if (mOnAudioRecordListener != null) {
+                final Timer timer = new Timer("waveform-record");
+
+                if (mOnAudioRecordListener != null) {
+                    timer.schedule(new TimerTask() {
+                        @Override
+                        public void run() {
                             mOnAudioRecordListener.onWaveSize(mWaveSize);
+
                         }
-                    }
-                }, 0, 25);
-                final long startPoint = System.currentTimeMillis();
+                    }, 0, 25);
+                }
 
                 Log.v(LOG_TAG, "Start recording...");
 
@@ -234,14 +210,19 @@ public class AudioRecordHelper {
                 long shortsRead = 0;
                 int index = 0;
                 while (mShouldContinue) {
-                    int numberOfShort = audioRecord.read(audioBuffer, 0, audioBuffer.length);
+                    final int numberOfShort = audioRecord.read(audioBuffer, 0, audioBuffer.length);
                     shortsRead += numberOfShort;
 
-//                    for (int i = 0; i < blockSize && i < numberOfShort; i++) {
-//                        toTrans[i] = (double) audioBuffer[i] / Short.MAX_VALUE;
-//                    }
-//                    fftTrans.ft(toTrans);
-//                    setCurrentWaveSize(toTrans, blockSize);
+                    mThreadPoolExecutor.execute(new Runnable() {
+                        @Override
+                        public void run() {
+                            for (int i = 0; i < blockSize && i < numberOfShort; i++) {
+                                toTrans[i] = (double) audioBuffer[i] / Short.MAX_VALUE;
+                            }
+                            fftTrans.ft(toTrans);
+                            setCurrentWaveSize(toTrans, blockSize);
+                        }
+                    });
 
                     // write to storage
                     byte[] b = short2byte(audioBuffer);
@@ -271,10 +252,12 @@ public class AudioRecordHelper {
         }).start();
     }
 
-    private void playWavFile(File file, final float volume) {
+    private void playWavFile(File file, final float volume, final long seek) {
         if (mWaveMediaPlayer == null) {
             mWaveMediaPlayer = new MediaPlayer();
         }
+
+        final Timer timer = new Timer("waveform-play");
         try {
             mWaveMediaPlayer.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
                 @Override
@@ -282,7 +265,16 @@ public class AudioRecordHelper {
                     if (volume >= 0 && volume <= 1) {
                         mp.setVolume(volume, volume);
                     }
+                    mp.seekTo((int) seek);
                     mp.start();
+                    if (mOnAudioRecordListener != null) {
+                        timer.schedule(new TimerTask() {
+                            @Override
+                            public void run() {
+                                mOnAudioRecordListener.onUpdateWaveFramePos();
+                            }
+                        }, 0, 25);
+                    }
                 }
             });
 
@@ -290,6 +282,7 @@ public class AudioRecordHelper {
                 @Override
                 public boolean onError(MediaPlayer mp, int what, int extra) {
                     Log.e(LOG_TAG, "Media Player onError");
+                    timer.cancel();
                     return false;
                 }
             });
@@ -299,8 +292,11 @@ public class AudioRecordHelper {
                 public void onCompletion(MediaPlayer mp) {
                     mp.release();
                     mWaveMediaPlayer = null;
+                    timer.cancel();
                 }
             });
+
+
 
             FileDescriptor fd = null;
             FileInputStream fis = new FileInputStream(file);
@@ -450,5 +446,7 @@ public class AudioRecordHelper {
 
     public interface OnAudioRecordListener {
         void onWaveSize(int size);
+
+        void onUpdateWaveFramePos();
     }
 }
