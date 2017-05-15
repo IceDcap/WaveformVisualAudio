@@ -386,6 +386,9 @@ public class WaveformView extends View {
         mWaveHeights = waveHeights;
         mCurrentTime = waveHeights.length * 1000 / 40;// / (int) mInterValOfSeconds;
         mLeft = calculateLeft(mWaveHeights);//mMarginLeft;
+        if (null != mListener) {
+            mListener.onWaveformOffset(mCurrentTime);
+        }
         invalidate();
     }
 
@@ -473,6 +476,8 @@ public class WaveformView extends View {
         void onWaveformScrolled(long seek);
 
         void onWaveformScrolling(long seek);
+
+        void onWaveformOffset(long time);
     }
 
 

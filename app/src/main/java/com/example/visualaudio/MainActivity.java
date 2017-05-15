@@ -23,17 +23,20 @@ import android.view.View;
 import android.widget.Button;
 import android.widget.ImageView;
 
+import com.example.visualaudio.soundfile.CheapSoundFile;
+
+import java.io.File;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-public class MainActivity extends Activity implements WaveformView.WaveformListener {
+public class MainActivity extends Activity implements WaveformView.WaveformListener, AudioRecordHelper.OnAudioRecordListener {
     private static final int DEFAULT_DURATION = 48;
     private int mRecordBufferSize;
     int frequency = 44100;
     int channelConfig = AudioFormat.CHANNEL_IN_MONO;
     int audioFormat = AudioFormat.ENCODING_PCM_16BIT;
-    RealDoubleFFT fftTrans;
+    //    RealDoubleFFT fftTrans;
     int blockSize = 300;
     Button startStopBtn;
     boolean started = false;
@@ -42,6 +45,7 @@ public class MainActivity extends Activity implements WaveformView.WaveformListe
     Bitmap bitmap;
     Canvas canvas;
     Paint paint;
+    AudioRecordHelper helper;
 
     WaveformView mWaveformView;
     int waveHeight;
@@ -70,33 +74,13 @@ public class MainActivity extends Activity implements WaveformView.WaveformListe
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+        helper = new AudioRecordHelper(new File(getExternalFilesDir(null), System.currentTimeMillis() + ".wav"));
 
+        helper.setOnAudioRecordListener(this);
         startStopBtn = (Button) findViewById(R.id.startStopBtn);
-        startStopBtn.setOnClickListener(new View.OnClickListener() {
 
-            @Override
-            public void onClick(View v) {
 
-                if (started) {
-                    started = false;
-                    startStopBtn.setText("Start");
-                    recordAudioTask.cancel(true);
-                    mHandler.removeMessages(0);
-                } else {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
-                            checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                        requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, 0);
-                    } else {
-                        started = true;
-                        recordAudioTask = new RecordAudioTask();
-                        startStopBtn.setText("Stop");
-                        recordAudioTask.execute();
-                    }
-                }
-            }
-        });
-
-        fftTrans = new RealDoubleFFT(blockSize);
+//        fftTrans = new RealDoubleFFT(blockSize);
         mWaveformView = (WaveformView) findViewById(R.id.waveform_view);
         mWaveformView.setDuration(DEFAULT_DURATION);
         mWaveformView.setWaveformListener(this);
@@ -108,6 +92,32 @@ public class MainActivity extends Activity implements WaveformView.WaveformListe
         paint = new Paint();
         paint.setColor(Color.GREEN);
         imgView.setImageBitmap(bitmap);
+
+        startStopBtn.setOnClickListener(new View.OnClickListener() {
+
+            @Override
+            public void onClick(View v) {
+
+                if (started) {
+                    started = false;
+                    startStopBtn.setText("Start");
+//                    recordAudioTask.cancel(true);
+//                    mHandler.removeMessages(0);
+                    helper.stop();
+                } else {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+                            checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                        requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, 0);
+                    } else {
+                        started = true;
+                        startStopBtn.setText("Stop");
+//                        recordAudioTask = new RecordAudioTask();
+//                        recordAudioTask.execute();
+                        helper.start(mWaveformView.getCurrentTime());
+                    }
+                }
+            }
+        });
     }
 
 
@@ -124,6 +134,7 @@ public class MainActivity extends Activity implements WaveformView.WaveformListe
     @Override
     public void onWaveformScrolled(long seek) {
         Log.e("ddd", "seek == " + seek);
+        mWaveIndex =(int) (seek / 25);
     }
 
     @Override
@@ -131,8 +142,30 @@ public class MainActivity extends Activity implements WaveformView.WaveformListe
 
     }
 
+    @Override
+    public void onWaveformOffset(long time) {
+    }
+
     public void resetWaveView(View v) {
-        mWaveformView.reset();
+//        mWaveformView.reset();
+        helper.play();
+    }
+
+    int mWaveIndex = 0;
+
+    @Override
+    public void onWaveSize(int size) {
+        if (mWaveIndex > mWaveHeights.length - 1) {
+            mWaveHeights = Arrays.copyOf(mWaveHeights, mWaveHeights.length * 2);
+        }
+        mWaveHeights[mWaveIndex] = size;
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                mWaveformView.refreshByFrame(Arrays.copyOfRange(mWaveHeights, 0, mWaveIndex));
+            }
+        });
+        mWaveIndex++;
     }
 
     private class RecordAudioTask extends AsyncTask<Void, double[], Void> {
@@ -147,9 +180,10 @@ public class MainActivity extends Activity implements WaveformView.WaveformListe
                         MediaRecorder.AudioSource.MIC, frequency,
                         channelConfig, audioFormat, bufferSize);
 
-//                blockSize = bufferSize / 2;
+                blockSize = bufferSize / 2;
                 short[] audioBuffer = new short[blockSize];
                 double[] toTrans = new double[blockSize];
+                RealDoubleFFT fftTrans = new RealDoubleFFT(blockSize);
 
                 audioRecord.startRecording();
 
@@ -166,6 +200,7 @@ public class MainActivity extends Activity implements WaveformView.WaveformListe
                 }
                 audioRecord.stop();
             } catch (Throwable t) {
+                t.printStackTrace();
                 Log.e("AudioRecord", "Recording failed");
             }
             return null;
@@ -173,19 +208,21 @@ public class MainActivity extends Activity implements WaveformView.WaveformListe
 
         @Override
         protected void onProgressUpdate(double[]... values) {
+            long cur = System.currentTimeMillis();
             canvas.drawColor(Color.BLACK);
             float j = 0;
             for (int i = 0; i < values[0].length; i++) {
                 int x = i;
                 int downy = (int) (100 - (values[0][i] * 10));
                 int upy = 100;
-                if (i < 50) {
+                if (i < blockSize / 6) {
                     j += Math.abs(values[0][i] * 10);
                 }
                 canvas.drawLine(x, downy, x, upy, paint);
             }
-            waveHeight = (int) (j / 50);
+            waveHeight = (int) (j / (blockSize / 6));
             imgView.invalidate();
+//            Log.e("ddd", "depend times : " + (System.currentTimeMillis() - cur));
         }
     }
 

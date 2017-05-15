@@ -1,13 +1,35 @@
 package com.example.visualaudio;
 
+import android.content.Context;
 import android.media.AudioFormat;
+import android.media.AudioManager;
 import android.media.AudioRecord;
+import android.media.AudioTrack;
+import android.media.MediaPlayer;
 import android.media.MediaRecorder;
 import android.os.Process;
 import android.util.Log;
 
+import com.example.visualaudio.soundfile.CheapSoundFile;
+
+import java.io.BufferedInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
+import java.io.File;
+import java.io.FileDescriptor;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.RandomAccessFile;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.ShortBuffer;
+import java.util.Timer;
+import java.util.TimerTask;
+
+import ca.uol.aig.fftpack.RealDoubleFFT;
 
 /**
  * Created by icedcap on 14/05/2017.
@@ -15,16 +37,152 @@ import java.io.RandomAccessFile;
 
 public class AudioRecordHelper {
     private static final String LOG_TAG = "AudioRecordHelper";
+    private static final int DEFAULT_BUFFER_SIZE = 1024 * 4;
+    private static final int EOF = -1;
     private RandomAccessFile mRandomAccessFile;
     private static final int SAMPLE_RATE = 44100;
     private boolean mShouldContinue;
     private int mRecordBufferSize;
-    private static long sWroteAccessFilePointer;
-    private static long sRecordedDuration;
+    private int mWaveSize;
+    private AudioTrack mAudioTrack;
+    private ShortBuffer mSamples; // the samples to play
+    private int mNumSamples; // number of samples to play
+    private File mFile;
+    private String mFilename;
+    private CheapSoundFile mCheapSoundFile;
+    private MediaPlayer mWaveMediaPlayer;
+
+    final WaveHeader waveHeader = new WaveHeader();
+
+    private OnAudioRecordListener mOnAudioRecordListener;
+    private CheapSoundFile.ProgressListener mProgressListener;
+
+    private long mOffset;
+
+    public void setOnAudioRecordListener(OnAudioRecordListener onAudioRecordListener) {
+        mOnAudioRecordListener = onAudioRecordListener;
+    }
+
+    public AudioRecordHelper(File file) {
+        try {
+            mFile = file;
+            mFilename = mFile.getAbsolutePath();
+            mRandomAccessFile = new RandomAccessFile(mFile, "rw");
+        } catch (FileNotFoundException e) {
+            e.printStackTrace();
+        }
+
+    }
+
+    public AudioRecordHelper(String filename, CheapSoundFile.ProgressListener progressListener) {
+        try {
+            mFile = new File(filename);
+            if (!mFile.exists()) {
+                mFile.createNewFile();
+            }
+            mProgressListener = progressListener;
+            mCheapSoundFile = CheapSoundFile.create(filename, mProgressListener);
+            mRandomAccessFile = new RandomAccessFile(mFile, "rw");
+            Log.e("ddd", mCheapSoundFile.getFiletype() + "\t" + mCheapSoundFile.getFileSizeBytes() + "\t" + mCheapSoundFile.getFrameGains());
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public void start(long time) {
+        mShouldContinue = true;
+        try {
+            Log.e("ddd", "filename = " + mFile.getAbsolutePath());
+            CheapSoundFile cheapSoundFile = CheapSoundFile.create(mFile.getAbsolutePath(), new CheapSoundFile.ProgressListener() {
+                @Override
+                public boolean reportProgress(double fractionComplete) {
+                    return false;
+                }
+            });
+            Log.e("ddd", "size = " + cheapSoundFile.getFileSizeBytes() + "\tframe = " + cheapSoundFile.getNumFrames() + "\t");
+            final long filePointerSeek = cheapSoundFile.getAvgBitrateKbps() * time;
+            Log.e("ddd", "filePointerSeek >>> " + filePointerSeek);
+            Log.e("ddd", " >>> " + cheapSoundFile.getNumFrames());
+            recordAudio(filePointerSeek);
+
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+    }
+
+    class Task implements Runnable{
+        int blockSize;
+        int numberOfShort;
+        short[] audioBuffer;
+
+        RealDoubleFFT fftTrans;// = new RealDoubleFFT(blockSize);
+        double[] toTrans;// = new double[blockSize];
+
+        public Task(int blockSize, int numberOfShort) {
+            this.blockSize = blockSize;
+            this.numberOfShort = numberOfShort;
+            fftTrans = new RealDoubleFFT(blockSize);
+            toTrans = new double[blockSize];
+        }
+
+        public void update(int blockSize, int numberOfShort){
+
+            this.blockSize = blockSize;
+            this.numberOfShort = numberOfShort;
+            fftTrans = new RealDoubleFFT(blockSize);
+            toTrans = new double[blockSize];
+        }
+
+        @Override
+        public void run() {
+            for (int i = 0; i < blockSize && i < numberOfShort; i++) {
+                toTrans[i] = (double) audioBuffer[i] / Short.MAX_VALUE;
+            }
+            fftTrans.ft(toTrans);
+            setCurrentWaveSize(toTrans, blockSize);
+        }
+    }
+
+    public void stop() {
+        mShouldContinue = false;
+    }
+
+    public void play() {
+        mShouldContinue = true;
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+//                playPCMAudio(mFile, 1);
+                playWavFile(mFile, 1);
+            }
+        }).start();
+
+    }
+
+    public int getWaveSize() {
+        return mWaveSize;
+    }
+
+    Task mTask;
+
     private void recordAudio(final long offset) {
         new Thread(new Runnable() {
             @Override
             public void run() {
+                mOffset = offset;
+
+                if (mOffset < 44) {
+                    final short numChannels = 1;
+                    final short bitsPerSample = 16;
+                    waveHeader.setFormat(WaveHeader.FORMAT_PCM);
+                    waveHeader.setNumChannels(numChannels);
+                    waveHeader.setSampleRate(44100);
+                    waveHeader.setBitsPerSample(bitsPerSample);
+                    mOffset = 44;
+                }
+
+
                 Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO);
 
                 // buffer size
@@ -34,7 +192,13 @@ public class AudioRecordHelper {
                     mRecordBufferSize = SAMPLE_RATE * 2;
                 }
 
-                short[] audioBuffer = new short[mRecordBufferSize / 2];
+                // audio buffer (AudioRecord receive the short type data)
+                int blockSize = mRecordBufferSize / 2;
+                short[] audioBuffer = new short[blockSize];
+//
+//                final RealDoubleFFT fftTrans = new RealDoubleFFT(blockSize);
+//                double[] toTrans = new double[blockSize];
+
 
                 AudioRecord audioRecord = new AudioRecord(MediaRecorder.AudioSource.DEFAULT,
                         SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO,
@@ -46,17 +210,25 @@ public class AudioRecordHelper {
                 }
 
                 audioRecord.startRecording();
+                final Timer timer = new Timer("waveform");
+                timer.schedule(new TimerTask() {
+                    @Override
+                    public void run() {
+                        if (mOnAudioRecordListener != null) {
+                            mOnAudioRecordListener.onWaveSize(mWaveSize);
+                        }
+                    }
+                }, 0, 25);
                 final long startPoint = System.currentTimeMillis();
 
                 Log.v(LOG_TAG, "Start recording...");
 
                 try {
-                    mRandomAccessFile.seek(offset);
+                    mRandomAccessFile.seek(mOffset);
                 } catch (IOException e) {
                     e.printStackTrace();
                 }
 
-                double[] toTrans = null;
 
                 long bytesRead = 0;
                 long shortsRead = 0;
@@ -65,24 +237,158 @@ public class AudioRecordHelper {
                     int numberOfShort = audioRecord.read(audioBuffer, 0, audioBuffer.length);
                     shortsRead += numberOfShort;
 
+//                    for (int i = 0; i < blockSize && i < numberOfShort; i++) {
+//                        toTrans[i] = (double) audioBuffer[i] / Short.MAX_VALUE;
+//                    }
+//                    fftTrans.ft(toTrans);
+//                    setCurrentWaveSize(toTrans, blockSize);
 
                     // write to storage
                     byte[] b = short2byte(audioBuffer);
                     bytesRead += b.length;
                     try {
                         mRandomAccessFile.write(b, 0, mRecordBufferSize);
-                        sWroteAccessFilePointer = mRandomAccessFile.getFilePointer();
                     } catch (IOException e) {
                         e.printStackTrace();
                     }
                 }
                 final long endPoint = System.currentTimeMillis();
                 audioRecord.stop();
-                sRecordedDuration += endPoint - startPoint;
+                try {
+                    mOffset = mRandomAccessFile.getFilePointer();
+                    int byteCount = (int) (mRandomAccessFile.getFilePointer() - 44);
+                    Log.e("ddd", "byte count = " + byteCount);
+                    waveHeader.setNumBytes(byteCount);
+                    mRandomAccessFile.seek(0);
+                    mRandomAccessFile.write(waveHeader.getHeader(), 0, 44);
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+                timer.cancel();
                 audioRecord.release();
                 Log.v(LOG_TAG, String.format("Recording stopped. Samples read: %d", shortsRead));
             }
         }).start();
+    }
+
+    private void playWavFile(File file, final float volume) {
+        if (mWaveMediaPlayer == null) {
+            mWaveMediaPlayer = new MediaPlayer();
+        }
+        try {
+            mWaveMediaPlayer.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
+                @Override
+                public void onPrepared(MediaPlayer mp) {
+                    if (volume >= 0 && volume <= 1) {
+                        mp.setVolume(volume, volume);
+                    }
+                    mp.start();
+                }
+            });
+
+            mWaveMediaPlayer.setOnErrorListener(new MediaPlayer.OnErrorListener() {
+                @Override
+                public boolean onError(MediaPlayer mp, int what, int extra) {
+                    Log.e(LOG_TAG, "Media Player onError");
+                    return false;
+                }
+            });
+
+            mWaveMediaPlayer.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
+                @Override
+                public void onCompletion(MediaPlayer mp) {
+                    mp.release();
+                    mWaveMediaPlayer = null;
+                }
+            });
+
+            FileDescriptor fd = null;
+            FileInputStream fis = new FileInputStream(file);
+            fd = fis.getFD();
+            if (fd != null) {
+                mWaveMediaPlayer.setDataSource(fd);
+                mWaveMediaPlayer.prepare();
+//                mediaPlayer.start();
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void playPCMAudio(File file, float volume) {
+        int bufferSize = AudioTrack.getMinBufferSize(SAMPLE_RATE,
+                AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
+        if (bufferSize == AudioTrack.ERROR || bufferSize == AudioTrack.ERROR_BAD_VALUE) {
+            bufferSize = SAMPLE_RATE * 2;
+        }
+
+        if (mAudioTrack == null) {
+            mAudioTrack = new AudioTrack(AudioManager.STREAM_MUSIC,
+                    SAMPLE_RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT,
+                    bufferSize, AudioTrack.MODE_STREAM);
+            if (volume >= 0 && volume <= 1) {
+                mAudioTrack.setStereoVolume(volume, volume);
+            }
+        }
+
+        mAudioTrack.setPlaybackPositionUpdateListener(new AudioTrack.OnPlaybackPositionUpdateListener() {
+            @Override
+            public void onMarkerReached(AudioTrack track) {
+                Log.v(LOG_TAG, "Audio file end reached");
+                track.release();
+
+
+            }
+
+            @Override
+            public void onPeriodicNotification(AudioTrack track) {
+
+            }
+        });
+        mAudioTrack.setPositionNotificationPeriod(SAMPLE_RATE / 30); // 30 times per second
+        mAudioTrack.setNotificationMarkerPosition(mNumSamples);
+
+        mAudioTrack.play();
+
+        Log.v(LOG_TAG, "Audio file started");
+
+        short[] buffer = new short[bufferSize];
+        try {
+            short[] samples = getSamples(file);
+            mSamples = ShortBuffer.wrap(samples);
+            mNumSamples = samples.length;
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        mSamples.rewind();
+        int limit = mNumSamples;
+        int totalWritten = 0;
+        while (mSamples.position() < limit && mShouldContinue) {
+            int numSamplesLeft = limit - mSamples.position();
+            int samplesToWrite;
+            if (numSamplesLeft >= buffer.length) {
+                mSamples.get(buffer);
+                samplesToWrite = buffer.length;
+            } else {
+                for (int i = numSamplesLeft; i < buffer.length; i++) {
+                    buffer[i] = 0;
+                }
+                mSamples.get(buffer, 0, numSamplesLeft);
+                samplesToWrite = numSamplesLeft;
+            }
+            totalWritten += samplesToWrite;
+            mAudioTrack.write(buffer, 0, samplesToWrite);
+        }
+
+        if (!mShouldContinue || mSamples.position() >= limit) {
+            mShouldContinue = false;
+            if (mAudioTrack != null) {
+                mAudioTrack.release();
+            }
+            mAudioTrack = null;
+        }
+
+        Log.v(LOG_TAG, "Audio streaming finished. Samples written: " + totalWritten);
     }
 
     //Conversion of short to byte
@@ -96,5 +402,53 @@ public class AudioRecordHelper {
             sData[i] = 0;
         }
         return bytes;
+    }
+
+    private void setCurrentWaveSize(double[] toTrans, int bufferSize) {
+        int i = 0;
+        double res = 0;
+        while (i < bufferSize / 6) {
+            res += Math.abs(toTrans[i] * 10);
+            i++;
+        }
+        mWaveSize = (int) (res / (bufferSize / 6));
+    }
+
+
+    private short[] getSamples(File file) throws IOException {
+        InputStream is = new BufferedInputStream(new FileInputStream(file), 8 * 1024);
+        if (file.getAbsolutePath().endsWith("wav")) {
+            is.skip(44);
+        }
+        byte[] data;
+        try {
+            data = toByteArray(is);
+        } finally {
+            if (is != null) {
+                is.close();
+            }
+        }
+
+        ShortBuffer sb = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer();
+        short[] samples = new short[sb.limit()];
+        sb.get(samples);
+        return samples;
+    }
+
+    private byte[] toByteArray(final InputStream input) throws IOException {
+        final ByteArrayOutputStream output = new ByteArrayOutputStream();
+        long count = 0;
+        int n;
+        byte[] buffer = new byte[DEFAULT_BUFFER_SIZE];
+        while (EOF != (n = input.read(buffer))) {
+            output.write(buffer, 0, n);
+            count += n;
+        }
+        return output.toByteArray();
+    }
+
+
+    public interface OnAudioRecordListener {
+        void onWaveSize(int size);
     }
 }
