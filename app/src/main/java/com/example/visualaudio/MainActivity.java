@@ -46,7 +46,8 @@ public class MainActivity extends Activity implements WaveformView.WaveformListe
     Canvas canvas;
     Paint paint;
     AudioRecordHelper helper;
-    private long mCurrentTime;
+    private long mPlayTime;
+    private long mLastTime;
 
     WaveformView mWaveformView;
     int waveHeight;
@@ -114,13 +115,26 @@ public class MainActivity extends Activity implements WaveformView.WaveformListe
                         startStopBtn.setText("Stop");
 //                        recordAudioTask = new RecordAudioTask();
 //                        recordAudioTask.execute();
-                        helper.start(mWaveformView.getCurrentTime());
+                        record();
                     }
                 }
             }
         });
     }
 
+
+    private void record() {
+        helper.start(mWaveformView.getCurrentTimeByIndicator());
+        mWaveIndex = mWaveformView.getLeftWaveLengthByIndicator();//int) (mPlayTime / mWaveformView.getPeriodPerFrame());
+    }
+
+    private void playAudio() {
+        mPlayTime = mWaveformView.getCurrentTimeByIndicator();
+        if (mPlayTime >= mWaveformView.getCurrentTotalTime()){
+            mPlayTime = 0;
+        }
+        helper.play(mPlayTime);
+    }
 
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
@@ -134,9 +148,8 @@ public class MainActivity extends Activity implements WaveformView.WaveformListe
 
     @Override
     public void onWaveformScrolled(long seek) {
-        Log.e("ddd", "seek == " + seek);
-        mCurrentTime = seek;
-        mWaveIndex =(int) (seek / mWaveformView.getIntervalPerFrame());
+        mPlayTime = seek;
+        mWaveIndex =(int) (seek / mWaveformView.getPeriodPerFrame());
     }
 
     @Override
@@ -146,11 +159,12 @@ public class MainActivity extends Activity implements WaveformView.WaveformListe
 
     @Override
     public void onWaveformOffset(long time) {
+        mLastTime = time;
     }
 
     public void resetWaveView(View v) {
 //        mWaveformView.reset();
-        helper.play(mWaveIndex * mWaveformView.getIntervalPerFrame());
+        playAudio();
     }
 
     int mWaveIndex = 0;
@@ -175,10 +189,27 @@ public class MainActivity extends Activity implements WaveformView.WaveformListe
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
-                mWaveformView.refreshByPos(mCurrentTime);
-                mCurrentTime += mWaveformView.getIntervalPerFrame();
+                mWaveformView.refreshByPos(mPlayTime);
             }
         });
+
+        mPlayTime += mWaveformView.getPeriodPerFrame();
+    }
+
+    @Override
+    public void onMediaPlayerStart() {
+
+    }
+
+    @Override
+    public void onMediaPlayerStop() {
+        mPlayTime = mWaveformView.getCurrentTime();
+    }
+
+    @Override
+    public void onMediaPlayerComplete() {
+        mWaveformView.refreshToEndPos();
+        mPlayTime = mWaveformView.getCurrentTotalTime();
     }
 
     private class RecordAudioTask extends AsyncTask<Void, double[], Void> {
@@ -235,7 +266,6 @@ public class MainActivity extends Activity implements WaveformView.WaveformListe
             }
             waveHeight = (int) (j / (blockSize / 6));
             imgView.invalidate();
-//            Log.e("ddd", "depend times : " + (System.currentTimeMillis() - cur));
         }
     }
 

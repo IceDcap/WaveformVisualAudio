@@ -71,26 +71,11 @@ public class AudioRecordHelper {
             mFile = file;
             mFilename = mFile.getAbsolutePath();
             mRandomAccessFile = new RandomAccessFile(mFile, "rw");
-            mThreadPoolExecutor = (ThreadPoolExecutor) Executors.newFixedThreadPool(10);
+            mThreadPoolExecutor = (ThreadPoolExecutor) Executors.newFixedThreadPool(2);
         } catch (FileNotFoundException e) {
             e.printStackTrace();
         }
 
-    }
-
-    public AudioRecordHelper(String filename, CheapSoundFile.ProgressListener progressListener) {
-        try {
-            mFile = new File(filename);
-            if (!mFile.exists()) {
-                mFile.createNewFile();
-            }
-            mProgressListener = progressListener;
-            mCheapSoundFile = CheapSoundFile.create(filename, mProgressListener);
-            mRandomAccessFile = new RandomAccessFile(mFile, "rw");
-            Log.e("ddd", mCheapSoundFile.getFiletype() + "\t" + mCheapSoundFile.getFileSizeBytes() + "\t" + mCheapSoundFile.getFrameGains());
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
     }
 
     public int getWaveSize() {
@@ -101,17 +86,13 @@ public class AudioRecordHelper {
         mShouldContinue = true;
         if (time > 0) {
             try {
-                Log.e("ddd", "filename = " + mFile.getAbsolutePath());
                 CheapSoundFile cheapSoundFile = CheapSoundFile.create(mFile.getAbsolutePath(), new CheapSoundFile.ProgressListener() {
                     @Override
                     public boolean reportProgress(double fractionComplete) {
                         return false;
                     }
                 });
-                Log.e("ddd", "size = " + cheapSoundFile.getFileSizeBytes() + "\tframe = " + cheapSoundFile.getNumFrames() + "\t");
                 final long filePointerSeek = cheapSoundFile.getAvgBitrateKbps() * time;
-                Log.e("ddd", "filePointerSeek >>> " + filePointerSeek);
-                Log.e("ddd", " >>> " + cheapSoundFile.getNumFrames());
                 recordAudio(filePointerSeek);
 
             } catch (IOException e) {
@@ -129,15 +110,22 @@ public class AudioRecordHelper {
     }
 
     public void play(final long seek) {
-        mShouldContinue = true;
         new Thread(new Runnable() {
             @Override
             public void run() {
-//                playPCMAudio(mFile, 1);
                 playWavFile(mFile, 1, seek);
             }
         }).start();
 
+    }
+
+    public void stopMediaPlayer() {
+        if (mWaveMediaPlayer != null && mWaveMediaPlayer.isPlaying()) {
+            mWaveMediaPlayer.stop();
+            if (mOnAudioRecordListener != null) {
+                mOnAudioRecordListener.onMediaPlayerStop();
+            }
+        }
     }
 
 
@@ -238,7 +226,6 @@ public class AudioRecordHelper {
                 try {
                     mOffset = mRandomAccessFile.getFilePointer();
                     int byteCount = (int) (mRandomAccessFile.getFilePointer() - 44);
-                    Log.e("ddd", "byte count = " + byteCount);
                     waveHeader.setNumBytes(byteCount);
                     mRandomAccessFile.seek(0);
                     mRandomAccessFile.write(waveHeader.getHeader(), 0, 44);
@@ -293,9 +280,12 @@ public class AudioRecordHelper {
                     mp.release();
                     mWaveMediaPlayer = null;
                     timer.cancel();
+                    if (mOnAudioRecordListener != null) {
+                        mOnAudioRecordListener.onMediaPlayerStop();
+                        mOnAudioRecordListener.onMediaPlayerComplete();
+                    }
                 }
             });
-
 
 
             FileDescriptor fd = null;
@@ -448,5 +438,11 @@ public class AudioRecordHelper {
         void onWaveSize(int size);
 
         void onUpdateWaveFramePos();
+
+        void onMediaPlayerStart();
+
+        void onMediaPlayerStop();
+
+        void onMediaPlayerComplete();
     }
 }

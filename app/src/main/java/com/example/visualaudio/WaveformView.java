@@ -59,6 +59,7 @@ public class WaveformView extends View {
 
     private long mCurrentTime; // seconds
     private int mDuration = DEFAULT_DURATION; // the material time long.
+    private int mWaveLength;
     private int[] mWaveHeights; // 40 wave line per seconds
 
     // dimension
@@ -193,6 +194,7 @@ public class WaveformView extends View {
             mDegreePaint.setColor(mDegreeColor);
 
             mWavePaint.setColor(mWaveColor);
+            mWaveLength = (int) (mDuration * mInterValOfSeconds);
 
             mTimeTextPaint.setColor(mTimeTextColor);
             mTimeTextPaint.setTextSize(mTimeTextSize);
@@ -370,8 +372,14 @@ public class WaveformView extends View {
         invalidate();
     }
 
+    /**
+     * Set duration
+     *
+     * @param duration in seconds
+     */
     public void setDuration(int duration) {
         mDuration = duration;
+        mWaveLength = (int) (duration * mInterValOfSeconds);
     }
 
     public int getDuration() {
@@ -386,6 +394,12 @@ public class WaveformView extends View {
         return mWaveHeights;
     }
 
+    /**
+     * Refresh when recording
+     *
+     * @param waveHeights add a wave height to {@code mWaveHeights}
+     *                    per frame time period {@code getPeriodPerFrame()}
+     */
     public void refreshByFrame(int[] waveHeights) {
         mWaveHeights = waveHeights;
         mCurrentTime = waveHeights.length * 1000 / (int) mInterValOfSeconds;
@@ -396,12 +410,35 @@ public class WaveformView extends View {
         postInvalidate();
     }
 
-    public void refreshByPos(long startTime) {
-        mLeft = calculateLeft(startTime);
+    /**
+     * Refresh when playing
+     *
+     * @param currentTime The best way is refresh in period {@code getPeriodPerFrame()}
+     */
+    public void refreshByPos(long currentTime) {
+        mLeft = calculateLeft(currentTime);
         if (null != mListener) {
             mListener.onWaveformOffset(mCurrentTime);
         }
         postInvalidate();
+    }
+
+    /**
+     * Refresh to start of position
+     */
+    public void refreshToStartPos() {
+        refreshByPos(0);
+    }
+
+    /**
+     * Refresh to end of position
+     */
+    public void refreshToEndPos() {
+        if (mWaveHeights == null) {
+            refreshByPos(0);
+        }else {
+            refreshByFrame(mWaveHeights);
+        }
     }
 
     private int calculateIndicatorLeft(long currentTime) {
@@ -417,7 +454,7 @@ public class WaveformView extends View {
         int left = mWidth / 2;
         int currentFrame = waveSet == null ? 0 : waveSet.length;
         if (currentFrame + mMarginLeft > left) {
-            return left;
+            return left - (int) DimenUtil.dip2px(getContext(), 1.5f);
         } else {
             return currentFrame + (int) mMarginLeft - (int) DimenUtil.dip2px(getContext(), 1.5f);
         }
@@ -438,16 +475,27 @@ public class WaveformView extends View {
 
     private float calculateLeft(long currentTime) {
         mCurrentTime = currentTime;
-        final int indicatorLeft = calculateIndicatorLeft(mWaveHeights/*currentTime*/);
-        return (float) indicatorLeft - (float) currentTime / 1000 * mInterValOfSeconds;
+        final int indicatorLeft = calculateIndicatorLeft(mWaveHeights) + (int) DimenUtil.dip2px(getContext(), 1.5f);
+        float res = (float) indicatorLeft - (float) currentTime / 1000 * mInterValOfSeconds;
+        final int waveLength = calculateWaveformWidth();
+        if (indicatorLeft - waveLength - res > 0) {
+            res = indicatorLeft - waveLength;
+        }
+        return res;
     }
 
     public float getWidthPerSecond() {
         return mInterValOfSeconds;
     }
 
-    public long getIntervalPerFrame() {
-        return (long)(1000 / mInterValOfSeconds);
+    /** the time of 1 frame */
+    public long getPeriodPerFrame() {
+        return (long) (1000 / mInterValOfSeconds);
+    }
+
+    /** the width of 1 milliseconds */
+    public float getRefreshSpeed() {
+        return mInterValOfSeconds / 1000f;
     }
 
     private float calculateLeft(int[] waveSet) {
@@ -457,6 +505,14 @@ public class WaveformView extends View {
             return mMarginLeft;
         }
         return halfWidth - waveLength + (int) DimenUtil.dip2px(getContext(), 1.5f);
+    }
+
+    private int calculateWaveformWidth() {
+        return mWaveHeights == null ? 0 : mWaveHeights.length;
+    }
+
+    public long getCurrentTotalTime() {
+        return calculateWaveformWidth() * getPeriodPerFrame();
     }
 
     private void adjustViewLeftWhenScroll() {
@@ -474,11 +530,30 @@ public class WaveformView extends View {
         return mCurrentTime;
     }
 
+    /** Get the exact current time by indicator */
+    public long getCurrentTimeByIndicator() {
+        if (mWaveHeights == null) return 0;
+        final int indicatorX = calculateIndicatorLeft(mWaveHeights) + (int) DimenUtil.dip2px(getContext(), 1.5f);
+        if (mLeft < indicatorX) {
+            int wavePosLeftByIndicator = indicatorX - (int) mLeft;
+            return wavePosLeftByIndicator * getPeriodPerFrame();
+        }else {
+            return 0;
+        }
+    }
+
+    /** Get the exact current wave length locate left of indicator */
+    public int getLeftWaveLengthByIndicator() {
+        long time = getCurrentTimeByIndicator();
+        return (int) (time * mInterValOfSeconds / 1000);
+    }
+
+    /** Get total frame represent for the total wave length or the final {@code int[] mWaveHeights} length */
     public long getTotalFrames() {
         return (long) (mDuration * mInterValOfSeconds);
     }
 
-    public String generateTime(int seconds) {
+    private String generateTime(int seconds) {
         int i = seconds % 60;
         int j = seconds / 60 % 60;
         seconds /= 3600;
